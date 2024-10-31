@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
@@ -81,7 +82,10 @@ int main (const int argc, const char **argv) {
 	state.p2.x = state.w = dvdlogo_width;
 	state.p2.y = state.h = dvdlogo_height;
 
-	init_x11();
+	if (!init_x11()) {
+		ec = 1;
+		goto END;
+	}
 
 	// - load xbm
 	// - init X11
@@ -112,11 +116,32 @@ static void update_screen_info (void) {
 	x11.refresh_interval.tv_nsec = 1000000000 / x11.refresh_rate;
 }
 
+static void print_l18n_xopen_err (void) {
+	const char *LANG = getenv("LANG");
+	const char *msg;
+
+	if (strncmp(LANG, "ko", 2) == 0) {
+		msg = "X 서버 연결 실패. `ssh -X` 옵션으로 X11 포워딩을 활성화 하셨습니까?";
+	}
+	else {
+		msg =
+			"Could not open X display. "
+			"Did you enable X11 forwarding with `ssh -X` option?";
+	}
+
+	fprintf(stderr, "%s\n", msg);
+}
+
 static bool init_x11 (void) {
 	XSizeHints hints = { 0, };
 	XGCValues gcv = { 0, };
 
 	x11.dpy = XOpenDisplay(NULL);
+	if (x11.dpy == NULL) {
+		print_l18n_xopen_err();
+		return false;
+	}
+	// after this point, X11 will call exit() upon error.
 	x11.scr_num = DefaultScreen(x11.dpy); // TODO: parameterise
 	x11.scr = XScreenOfDisplay(x11.dpy, x11.scr_num);
 	x11.rwnd = RootWindowOfScreen(x11.scr);
@@ -334,13 +359,13 @@ static int get_geo_nullable (
 #undef CHK_ASS
 }
 
-static void do_move (bool *redraw) {
+static void do_move (bool *redraw, const double v_factor) {
 	double dx, dy;
 	const unsigned int root_w = XWidthOfScreen(x11.scr);
 	const unsigned int root_h = XHeightOfScreen(x11.scr);
 
-	dx = state.dir.x * param.vel / x11.refresh_rate;
-	dy = state.dir.y * param.vel / x11.refresh_rate;
+	dx = state.dir.x * param.vel / x11.refresh_rate * v_factor;
+	dy = state.dir.y * param.vel / x11.refresh_rate * v_factor;
 	state.p1.x += dx;
 	state.p1.y += dy;
 	state.p2.x += dx;
@@ -381,10 +406,46 @@ static void do_move (bool *redraw) {
 	}
 }
 
+static void sub_ts (
+		struct timespec *out,
+		const struct timespec *a,
+		const struct timespec *b)
+{
+	if (a->tv_nsec < b->tv_nsec) {
+		out->tv_sec = a->tv_sec - 1 - b->tv_sec;
+		out->tv_nsec = 1000000000 + a->tv_nsec - b->tv_nsec;
+	}
+	else {
+		out->tv_sec = a->tv_sec - b->tv_sec;
+		out->tv_nsec = a->tv_nsec - b->tv_nsec;
+	}
+}
+
+static int cmp_ts (const struct timespec *a, const struct timespec *b) {
+	if (a->tv_sec < b->tv_sec) {
+		return -1;
+	}
+	else if (a->tv_sec > b->tv_sec) {
+		return 1;
+	}
+
+	return a->tv_nsec < b->tv_nsec ? -1 : a->tv_nsec > b->tv_nsec ? 1 : 0;
+}
+
+static double ts2d (const struct timespec *x) {
+	return (double)x->tv_nsec / 1000000000 + x->tv_sec;
+}
+
 static int main_loop (void) {
 	bool loop_flag = true;
 	bool redraw;
+	struct timespec ts_now;
+	struct timespec ts_last_tick;
+	struct timespec ts_delta;
+	double v_factor = 1.0;
 
+	clock_gettime(CLOCK_MONOTONIC, &ts_now);
+	memcpy(&ts_last_tick, &ts_now, sizeof(struct timespec));
 	while (true) {
 		redraw = false;
 
@@ -394,19 +455,39 @@ static int main_loop (void) {
 			break;
 		}
 
-		do_move(&redraw);
+		if (false) {
+			fprintf(stderr, "v_factor: %.6lf\n", v_factor);
+		}
+
+		do_move(&redraw, v_factor);
 
 		if (redraw) {
 			draw();
 		}
 
-		if (true) {
-			XSync(x11.dpy, False);
+		if (false) {
+			// manually introduce network delay for testing
+			ts_delta.tv_sec = 0;
+			ts_delta.tv_nsec = 50000000; // 50ms
+			nanosleep(&ts_delta, NULL);
 		}
-		else {
-			XFlush(x11.dpy);
+
+		clock_gettime(CLOCK_MONOTONIC, &ts_now);
+		sub_ts(&ts_delta, &ts_now, &ts_last_tick);
+
+		// TODO: to alleviate stuttering,
+		// do PID control to keep the X11 command queue under certain limit
+
+		v_factor = 1.0 + ts2d(&ts_delta) / ts2d(&x11.refresh_interval);
+
+		if (cmp_ts(&ts_delta, &x11.refresh_interval) < 0) {
+			struct timespec ts_sleep;
+
+			sub_ts(&ts_sleep, &x11.refresh_interval, &ts_delta);
+			nanosleep(&ts_sleep, NULL);
 		}
-		nanosleep(&x11.refresh_interval, NULL);
+
+		clock_gettime(CLOCK_MONOTONIC, &ts_last_tick);
 	}
 
 	return 0;
