@@ -7,6 +7,9 @@
 #include <X11/extensions/shape.h>
 #include <time.h>
 #include <math.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #include "img/dvdlogo.xbm"
 #include "img/dvdlogo_mask.xbm"
@@ -62,7 +65,8 @@ struct {
 static int main_loop (void);
 static bool init_x11 (void);
 static void deinit_x11 (void);
-static Bool MakeAlwaysOnTop(Display* display, Window root, Window mywin);
+static bool is_networked_x11 (Display *d);
+static bool MakeAlwaysOnTop (Display* display, Window root, Window mywin);
 
 /*
  * --monitor
@@ -111,9 +115,10 @@ static void update_screen_info (void) {
 	if (x11.refresh_rate <= 0) {
 		x11.refresh_rate = 10;
 	}
-	else if (x11.refresh_rate > 60) { // TODO: parameterise
+	else if (is_networked_x11(x11.dpy) && x11.refresh_rate > 60) { // TODO: parameterise
 		// "human eyes can't see 120hz"
-		// X server won't be able to handle that amount of requests per second
+		// that amount of requests per second won't be possible over the
+		// networked X11 connection anyways.
 		x11.refresh_rate = 60;
 	}
 	x11.refresh_interval.tv_sec = 0;
@@ -222,19 +227,53 @@ static void deinit_x11 (void) {
 	}
 }
 
+static bool is_ssh (void) {
+	const char *env = getenv("SSH_CONNECTION");
+	const bool ret = env != NULL && strlen(env) > 0;
+
+	if (false && ret) {
+		fprintf(stderr, "is_ssh() returned true.\n"); // FIXME
+	}
+
+	return ret;
+}
+
+static bool is_networked_display (Display *d) {
+	const int fd = ConnectionNumber(d);
+	struct sockaddr_storage addr;
+	socklen_t sl = sizeof(addr);
+
+	if (getsockname(fd, (struct sockaddr*)&addr, &sl) != 0) {
+		return false;
+	}
+
+	switch (addr.ss_family) {
+	case AF_INET:
+	case AF_INET6:
+		// FIXME
+		false && fprintf(stderr, "is_networked_display() returned true.\n");
+		return true;
+	}
+	return false;
+}
+
+static bool is_networked_x11 (Display *d) {
+	return is_networked_display(d) || is_ssh();
+}
+
 #define _NET_WM_STATE_REMOVE		0	// remove/unset property
 #define _NET_WM_STATE_ADD			1	// add/set property
 #define _NET_WM_STATE_TOGGLE		2	// toggle property
 
-static Bool MakeAlwaysOnTop(Display* display, Window root, Window mywin) {
+static bool MakeAlwaysOnTop (Display* display, Window root, Window mywin) {
 	Atom wmStateAbove = XInternAtom( display, "_NET_WM_STATE_ABOVE", 1 );
 	if( wmStateAbove == None ) {
-		return False;
+		return false;
 	}
 
 	Atom wmNetWmState = XInternAtom( display, "_NET_WM_STATE", 1 );
 	if( wmNetWmState == None ) {
-		return False;
+		return false;
 	}
 
 	// set window always on top hint
@@ -267,14 +306,14 @@ static Bool MakeAlwaysOnTop(Display* display, Window root, Window mywin) {
 		XSendEvent(display,
 			//mywin - wrong, not app window, send to root window!
 			root, // <-- DefaultRootWindow( display )
-			False,
+			false,
 			SubstructureRedirectMask | SubstructureNotifyMask,
 			(XEvent *)&xclient );
 
-		return True;
+		return true;
 	}
 
-	return False;
+	return false;
 }
 
 static void proc_key (XKeyEvent *evt, bool *loop_flag) {
