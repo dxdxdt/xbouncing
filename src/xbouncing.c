@@ -3,7 +3,6 @@
 #include <stdbool.h>
 #include <string.h>
 #include <X11/Xlib.h>
-#include <X11/Xutil.h>
 #include <X11/extensions/Xrandr.h>
 #include <X11/extensions/shape.h>
 #include <time.h>
@@ -112,6 +111,11 @@ static void update_screen_info (void) {
 	if (x11.refresh_rate <= 0) {
 		x11.refresh_rate = 10;
 	}
+	else if (x11.refresh_rate > 60) { // TODO: parameterise
+		// "human eyes can't see 120hz"
+		// X server won't be able to handle that amount of requests per second
+		x11.refresh_rate = 60;
+	}
 	x11.refresh_interval.tv_sec = 0;
 	x11.refresh_interval.tv_nsec = 1000000000 / x11.refresh_rate;
 }
@@ -121,12 +125,10 @@ static void print_l18n_xopen_err (void) {
 	const char *msg;
 
 	if (strncmp(LANG, "ko", 2) == 0) {
-		msg = "X 서버 연결 실패. `ssh -X` 옵션으로 X11 포워딩을 활성화 하셨습니까?";
+		msg = "X 서버 연결 실패.";
 	}
 	else {
-		msg =
-			"Could not open X display. "
-			"Did you enable X11 forwarding with `ssh -X` option?";
+		msg = "Could not open X display.";
 	}
 
 	fprintf(stderr, "%s\n", msg);
@@ -460,10 +462,10 @@ static int main_loop (void) {
 		}
 
 		do_move(&redraw, v_factor);
-
 		if (redraw) {
 			draw();
 		}
+		XFlush(x11.dpy);
 
 		if (false) {
 			// manually introduce network delay for testing
@@ -474,9 +476,6 @@ static int main_loop (void) {
 
 		clock_gettime(CLOCK_MONOTONIC, &ts_now);
 		sub_ts(&ts_delta, &ts_now, &ts_last_tick);
-
-		// TODO: to alleviate stuttering,
-		// do PID control to keep the X11 command queue under certain limit
 
 		v_factor = 1.0 + ts2d(&ts_delta) / ts2d(&x11.refresh_interval);
 

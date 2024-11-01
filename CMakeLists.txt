@@ -18,6 +18,13 @@ add_library(libxbouncing
 
 include(FindX11)
 
+IF (NOT X11_FOUND)
+	MESSAGE(FATAL_ERROR "X11 not found.")
+ENDIF()
+IF (NOT X11_Xrandr_FOUND)
+	MESSAGE(FATAL_ERROR "Xrandr not found.")
+ENDIF()
+
 add_executable(xbouncing src/xbouncing.c)
 add_executable(parse-xbm src/parse-xbm.c)
 target_link_libraries(parse-xbm libxbouncing)
