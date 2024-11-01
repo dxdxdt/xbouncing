@@ -127,13 +127,12 @@ static void update_screen_info (void) {
 
 static void print_l18n_xopen_err (void) {
 	const char *LANG = getenv("LANG");
-	const char *msg;
+	const char *msg = "Could not open X display.";
 
-	if (strncmp(LANG, "ko", 2) == 0) {
-		msg = "X 서버 연결 실패.";
-	}
-	else {
-		msg = "Could not open X display.";
+	if (LANG != NULL) {
+		if (strncmp(LANG, "ko", 2) == 0) {
+			msg = "X 서버 연결 실패.";
+		}
 	}
 
 	fprintf(stderr, "%s\n", msg);
